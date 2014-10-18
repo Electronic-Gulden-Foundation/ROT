@@ -36,6 +36,8 @@ b :		get block at height
 It is easy for a client, using one input field, to determine if it concerns a block, a public key or a block.
 You can test the results of these functions at efl.nl (to use pu prefix a . befor the 4 input-characters)
 
+function checkkey is hard-coded for e-Gulden/Litecoin
+
 **************************************************************************** */
 
 require_once 'jsonRPCClient.php';
