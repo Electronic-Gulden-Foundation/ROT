@@ -3,22 +3,27 @@ ROT
 
 Ring of Trust
 
-One major cryptocoin bottleneck is the dependancy of a strong, large network of clients, collaborating to distribute the blockchain and single transactions. To download the bitcoin blockchain it currently takes about three days and consumes 34 GB (october 2014). When you open a Bitcoin blockchain-server, the network bandwith approaches 400 GB a month. The need for light-weight client-solutions increases but this endangers the distributed nature of Bitcoin. 
+A major cryptocoin bottleneck is the dependency on a powerful and, by necessity, large network of clients, which all collaborate to distribute both the blockchain and individual transactions. To download the full Bitcoin blockchain into the client software may take up to three days and already requires over 34 GBytes of available diskspace (October 2014). When you run a Bitcoin blockchain server, the network bandwidth required rapidly approaches 400 GBytes a month. The need for light-weight client solutions is apparent, but this same need may endanger the distributed nature of Bitcoin. 
 
-With the mining component we already saw clustering of computingpower into Pools. Solo-mining is not feasable. It remains important to avoid 51% dominance of one mining pool for security reasons, but mining contributors are advised to avoid adhering to the largest pool.
+With the mining component of Bitcoin we have already seen a clustering of computing power into mining pools. Solo mining is simply no longer feasible. For security reasons it is important to avoid the 51% dominance of one mining pool over the other miners, and mining contributors are therefore advised to avoid to contribute solely to the largest pool.
 
-Once the blochchain load will become too heavy for a normal enduser, endusers are tempted to have their wallets hosted. The alternative is to use centralised blockchain servers such as Mycelium and blochchain.info to keep the keys private but these are proprietary solutions. What would be necessary is to have distributed blockchain-services that are thrustworthy and that can by used by light clients to perform the necessary tasks to complete transactions.
+Once the blockchain load becomes too heavy or too unmanageable for a typical enduser, people may look at having their wallets hosted online. An alternative is to use centralised blockchain servers such as Mycelium or blockchain.info to keep keys private, but these are proprietary solutions. What is really needed is the availability of trustworthy distributed blockchain services, which can by used by lightweight clients to perform the tasks necessary to complete transactions.
 
-The lightweight client must trust the blockchain-server, for example to show the correct balances and to allow the client to select and spend inputs that are his. To avoid single points of failure and to stimulate a large network of blockchain-services, the first contributors to think of are the mining-pools and exchanges that will allways need the entire blockchain and that could provide transaction services to light clients. A second option is the elaboration of a "Ring Of Trust", consisting of a network of collaborating blockchain servers and a small transaction fee to be agreed upon, based on the operational costs of these services. Ideally, the client savings to get rid of the weight of the blockchain, should outweigh the cost of the maintenance of a ring of thrust and therefor a realistic distribution of these costs is necessary.
+Such a lightweight client must trust the centralised blockchain-server, in order to show the correct balances and to allow the user of the client to select and spend inputs that are his own. 
 
-The functions to be provided are :
-- Functions to prove the internal blockchain integrity within the Ring of Trust.
-- Functions to synchronize the client database with known inputs
-- The client must be able to select multiple server nodes (or passively receive multiple connections/peers) 
+To avoid having propietary possible single points of failure and to stimulate the emergence of a large network of blockchain services, the first possible contributors to think about are the mining pools and exchanges.  They will allways need to load the whole blockchain anyway and they could therefore provide transaction services to lightweight clients. Another option is the establishment of a "Ring of Trust", which should be made up of a network of collaborating blockchain servers. Their operating costs are to be covered by a small transaction fee, the height of which needs to be agreed upon. 
+
+Ideally the savings attained by users, by getting rid of the weight of the blockchain, outweighs the maintenance costs of a Ring of Trust and a realistic and fair distribution of such costs is thus a definite requirement.
+
+The services to be provided are :
+
+- Functions to proof the internal blockchain integrity within the Ring of Trust.
+- Functions to synchronize the client database with known inputs 
+- The client software must be enabled to select multiple server nodes (or passively receive multiple connections/peers)  
 - ....
 
-To elaborate a ring of thrust we start by setting up a block-chain service. It currently consists of an index-builder and a small http-interface. The index consists of two parts :
-- An index of all transactions to allow browsing through the blockchain
-- An index of all public keys; Each public key consists of a file with all inputs and outputs
+To build a Ring of Trust we will start by setting up a blockchain service. This service will incorporate an index builder and a simple http interface. The index consists of two parts :
+- An index of all transactions to allow browsing through the blockchain 
+- An index of all public keys; each public key is a file containing all inputs and outputs 
 
-The next challenge will be to interconnect these services into a ring, chain, tree or otherwise. These services will need to test each other to enhance trust and to provide a comfortable level of redundancy.
+The next step is to interconnect these services into a ring, chain, tree or such. These services will need to continuously test each other to both enhance trust and to provide a comfortable level of redundancy.
