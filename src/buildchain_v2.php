@@ -22,222 +22,162 @@ OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
-****************************************************************************
-Known issue :
-- Whenever the processing of a block is unterupted (reboot, crash) the processing will restart next time.
-The next time some inputs will appear as double_spend; It only appears on servers with regular communication problems
-I have implemented a recovery procedure by restarting with the last processed IN/OUT (hanging)
-Still a single IN or OUT may have been partially processed
-That's why I interupt processing and send you a mail to let you investigate such a situation and the chain-health;
-Stop cron and manually set $repeat to 1 to rebuild the last block
-Probably the interupt can be removed later.
-
 **************************************************************************** */
+error_reporting(E_ALL);
+/* buildchain.conf
+  * $repeat: tells how many blocks are allowed to be processed in one run (* to continue to current blockheight)
+  * $conf: number of confirmations before accepting block
+ */
+list($user,$ww,$port,$repeat,$mail,$servername,$conf)=explode("|",file_get_contents("$root/buildchain.conf"));
+
+$start=microtime(true); 
+$root="/var/erc";
+define("ROOT",$root);
 
 require_once 'jsonRPCClient.php';
-
-$root="/var/EFL";
-if (!file_exists("$root/pub")) {@mkdir("$root/pub",0755);}
-if (!file_exists("$root/tx")) {@mkdir("$root/pub",0755);}
-if (!file_exists("$root/buildchain.conf")) {die("$root/buildchain.conf missing\n");}
-
-/* buildchain.conf
-  * Third parameter $repeat tells how many blocks are allowed to be processed in one run (* to continue to current blockheight)
- */
-list($user,$ww,$repeat,$mail,$servername)=explode("|",file_get_contents("$root/buildchain.conf"));
-
-if (file_exists("$root/lock")) {die("Already running or previous exit with error status");}
-touch("$root/lock");  // Lock
-
-$blockstate=""; $tx_count="";
-if (file_exists("$root/blockstate")) { // Interupted during processing
-	if ($repeat!=1) {
-		$subject="Blockchain processing halted on $servername (".date("d-m-Y").")";
-		$message=file_get_contents("$root/blockstate");
-		$headers = 'MIME-Version: 1.0 ' . "\r\n";
-		$headers .= 'Content-type: text/html; charset=iso-8859-1' . "\r\n";
-		mail($mail, $subject, $message, $headers);
-		die("Processing halted due to interupted block");
-	}
-	list($tx_hanging,$hanging_state,$tx_nhanging)=explode("|",file_get_contents("$root/blockstate"));
-}
-
-error_reporting(E_ALL);
-$start=microtime(true); 
-
-// Start with block 1 or last block processed
-if (file_exists("$root/block")) {$block=file_get_contents("$root/block")+1;} else {$block=1;}
 try {
-	$efl = new jsonRPCClient("http://$user:$ww@localhost:21015/");
-	$mine=$efl->getmininginfo();
-} catch(Exception $e0) {
-	DBG("RPC-initialisation or get-info failed");
-	unlink("$root/lock");  // Release
-	die("RPC-initialisation or get-info failed");
+	$efl = new jsonRPCClient("http://$user:$ww@127.0.0.1:$port/");
+	$balance=$efl->getbalance("");
+} catch (Exception $e) {
+	$error=" [".$e->getMessage()."]";
+	echo "\No contact (JSON) ".$error; 
+	die("");
 }
 
+if (!file_exists(ROOT."/sema")) {
+	file_put_contents(ROOT."/sema","lock");
+} else {
+	if (filesize(ROOT."/sema")==$conf) {die("sema");}
+	file_put_contents(ROOT."/sema","lock");
+}
+
+if (file_exists(ROOT."/block")) {$block=file_get_contents(ROOT."/block")+1;} else {$block=1;}
+$mine=$efl->getmininginfo();
 $blocks=$mine['blocks'];
-DBG2("$user,$ww,$repeat,$mail,$servername");
-DBG2("From $block to $blocks\n");
-$error_count=0;$nrepeat=0;
-if ($repeat=="*") {$repeat=-1;}
+echo "From $block to $blocks\n";
 for ($blok=$block;$blok<=$blocks;$blok++) {
-	if ($repeat==$nrepeat) {break;}
-	$nrepeat++;
-	if ($block%1000==1) {DBG2($block."\n");}
-	try {
-		$b=$efl->getblock($efl->getblockhash(1*$block));
-		if ($b['confirmations']<4 ){
-			// This is the most important 51% attack probleem;
-			// If you wait longer the explorer becomes less up-to date
-			// TODO :
-			// - wait 20 blocks, but build a buffer of the 20 most recent blocks using blocknotify that runs in parallel
-			// - Detect forks
-//			DBG2($blok.": ".$block['confirmations']."\n");
-			break;
-		}
-		// Buffer the input transactions
-		$TX=$b['tx'];
+	if (file_exists(ROOT."/stop")) {unlink(ROOT."/sema");die();}
+	
+	if ($block%1000==1) {echo $block.":".date("H:i:s")."\n";}
+	
+	$b=$efl->getblock($efl->getblockhash(1*$block));
+	if ($b['confirmations']<$conf ){ // || (microtime(true)-$start)>30
+		break;
+	}
+	$once=true;
+	try { $TX=$b['tx'];
 		foreach ($TX as $txi =>$tx) {
-			$TX_set[$txi]=$efl->getrawtransaction($tx,1);
-		}
-		try {
-			$n=0;
-			foreach ($TX as $txi =>$tx) {
-				$state="INPUT";
-				$TX_raw=$TX_set[$txi];
-				$VIN=$TX_raw['vin'];        //<...b191>
-				// process each input
-				foreach ($VIN as $vini =>$vin) {
-					file_put_contents("$root/blockstate","$tx|$state|$vini");
-					if ($hanging_state=="" || (($hanging_state==$state) && ($vini==$tx_nhanging))) {
-						$hanging_state="";
-						if (isset($vin['txid'])) { // process spend output  (unless root-transaction) (txid;vout)
-							$filename=getfile("$root/tx/",$vin['txid']);  //<0:...0553
-							$vout=$vin['vout'];
-							if (!file_exists($filename)) {
-								DBG("Lost output file:$block:$txi:{$vin['txid']}:$vout");
+			try {$TX_raw=$efl->getrawtransaction($tx,1);
+				$VIN=$TX_raw['vin'];
+				foreach ($VIN as $vin) {   // process each input
+					if (isset($vin['txid'])) { // process spend output  (unless root-transaction) (txid;vout)
+						$filename=getfile(ROOT."/tx/",$vin['txid']); 
+						$vout=$vin['vout'];
+						if (!file_exists($filename)) {
+							DBG("Lost output file:$block:$txi:{$vin['txid']}:$vout");
+						} else {
+							// format <out|xut>:<n>:<tx>:<value>  n=seq out
+							$file=file_get_contents($filename);
+							$x=strpos($file,"out:$vout:");  // Jump to output linenr=vout ($TX is added in pubkey file)
+							if ($x===false) {
+								$x=strpos($file,"xut:$vout:");
+								if ($x!==false) { 
+									DBG("Double spend :$block:$txi:{$vin['txid']}:$vout"); // Or previous run was interupted while block being geprocessed
+								}else{
+									DBG("Lost output :$block:$txi:{$vin['txid']}:$vout");
+								}
 							} else {
-								// format <out|xut>:<n>:<tx>:<value>  n=sequence number of out; the x means not spend yet
-								$file=file_get_contents($filename);
-								$x=strpos($file,"out:$vout:");  // Jump to output linenr=vout (You could add the transaction that causes this ($TX)) but for now we do this in  pubkey
-								if ($x===false) {
-									$x=strpos($file,"xut:$vout:");
-									if ($x!==false) { 
-										DBG("Double spend :$block:$txi:{$vin['txid']}:$vout"); // Or the block was already (partly) processed
-									}else{
-										DBG("Lost output :$block:$txi:{$vin['txid']}:$vout");
-									}
+								$pub=explode(":",substr($file,$x));  // cut the entire file from here and read pubkey
+								$pubkey=$pub[2];
+								$value=$pub[3]; // and vout is already known
+								$file[$x]="x"; // Spend marker
+								$x=strpos($file,"out:");
+								if ($x===false) {unlink($filename);} else {file_put_contents($filename,$file);}
+								$filename=getfile(ROOT."/pub/",$pubkey);
+								if (!file_exists($filename)) {
+									DBG("!Lost pub file:$block:$tx:$txi:{$vin['txid']}:$vout:$pubkey");
 								} else {
-									$pub=explode(":",substr($file,$x));  // cut the whole file from this point and read the pubkey
-									$pubkey=$pub[2];
-									$value=$pub[3]; // vout we know already
-									$file[$x]="x"; // Mark this line/transaction as Spend ()
-									file_put_contents($filename,$file);
-									$filename=getfile("$root/pub/",$pubkey);
-									if (!file_exists($filename)) {
-										DBG("!Lost pub file:$block:$tx:$txi:{$vin['txid']}:$vout:$pubkey");
-									} else {
-										// format <in|xn>:<n>:<tx>:<value>[:txout:vinnr]
-										// When the input is spend we mark the transaction that is causing it. This way we know where is is going
-										// ... save memory because there will be large pubkeys
-										$h=fopen($filename,"r");$ok=false;
-										$o=fopen($filename."_","w");
-										while ($line=fgets($h)) {
+									// format <in|xn>:<n>:<tx>:<value>[:txout:vinnr]
+									// If input is being spent we remember in which tx. This way we know where it went
+									$lines=file($filename);$rest="";$ok=false;
+									foreach ($lines as $line) {
+										if ($ok) {
+											$rest.=$line;
+										} else {
 											if (strpos($line,":{$vin['txid']}:")>0) {
-												$line=substr($line,0,-1).":$tx:$txi\n";
+												$line=trim($line).":$tx:$txi\n";
+												file_put_contents($filename.".x",$line,FILE_APPEND);
 												$ok=true;
+											} else {
+												$rest.=$line;
 											}
-											fputs($o,$line);
 										}
-										fclose($h);
-										fclose($o);
-										unlink($filename);
-										rename($filename."_",$filename);
-										if (!$ok) {DBG("Lost input :$block:$txi:{$vin['txid']}:$vout:$pubkey");}
 									}
+									if ($rest=="") {
+										unlink($filename);
+									}else{
+										file_put_contents($filename,$rest);
+									}
+									if (!$ok) {DBG("Lost input :$block:$txi:{$vin['txid']}:$vout:$pubkey");}
 								}
 							}
 						}
 					}
 				}
 				
-				// Process each output
-				$state="OUTPUT";
-				$VOUT=$TX_raw['vout'];$nout=0;
-				foreach ($VOUT as $vouti => $vout) {
+				$VOUT=$TX_raw['vout'];
+				foreach ($VOUT as $vout) {
 					if (isset($vout['value']) && isset($vout['scriptPubKey'])) { // process new input
-						file_put_contents("$root/blockstate","$tx|OUTPUT|$vouti");
-						if ($hanging_state=="" || (($hanging_state==$state) && ($vouti==$tx_nhanging))) {
-							$hanging_state="";
-							$pub=$vout['scriptPubKey'];
-							if (substr($pub['type'],0,6)!='pubkey') {
+						$pub=$vout['scriptPubKey'];
+						if ((substr($pub['type'],0,6)!='pubkey')&&($pub['type']!='checklocktimeverify')&&($pub['type']!='scripthash')) {
+							if ($pub['type']!='nulldata'){
 								DBG("Unknown output :$block:$txi:{$vout['n']}");
+							}
+						} else {
+							if (count($pub['addresses'])>1) {
+								DBG("Multiple output ? :$block:$txi:{$vout['n']} don't know what to do");
 							} else {
-								if (count($pub['addresses'])>1) {
-									DBG("Multiple output ? :$block:$txi:{$vout['n']} don't know what to do");
-								} else {
-									$filename=getfile("$root/tx/",$tx);
-									$address=$pub['addresses'][0];
-									file_put_contents($filename,"out:{$vout['n']}:$address:{$vout['value']}\n",FILE_APPEND);
-									$filename=getfile("$root/pub/",$address);
-									file_put_contents($filename,"in:{$vout['n']}:$tx:{$vout['value']}\n",FILE_APPEND);
-								}
+								$filename=getfile(ROOT."/tx/",$tx);
+								$address=$pub['addresses'][0];
+								file_put_contents($filename,"out:{$vout['n']}:$address:{$vout['value']}\n",FILE_APPEND);
+								$filename=getfile(ROOT."/pub/",$address);
+								file_put_contents($filename,"in:{$vout['n']}:$tx:{$vout['value']}\n",FILE_APPEND);
 							}
 						}
 					}
-					$nout++;
 				}
-			}
-			file_put_contents("$root/block",$block);
-			unlink("$root/blockstate");
-			$block+=1;
-			$error_count=0;
-		} catch(Exception $e2) {
-			// Een fout die niet door RPC/daemon veroorzaakt wordt
-			// Ga toch maar door maar de keten is waarschijnlijk niet meer in orde
-			DBG("Something is wrong at block $block !  State $state");
-			if ($state=="INPUT") { DBG("tx:".$vin['txid']); }
-			if ($state=="OUTPUT") { DBG("n:$nout"); }
+			} catch(Exception $e2) {DBG("tx not accessable:$block:$txi");}		
 		}
-	} catch(Exception $e1) {
-		// Two types of errors : getblock of getrawtransaction
-		// I suspect because daemon is "busy" OR a network-error;
-		//
-		// Op windows heb ik er meer last van dan op unix;
-		// Op de kleine Virtual server en de dedicated geen enkel probleem, maar daar draaide geen http
-		// op de e-gulden-server om de 15000 blokken
-		$error_count++;
-		sleep(1);
-		if ($error_count<10) {$blok--;
-		} else {
-			DBG("retry block $block");
-			break;
-		}
-		DBG("retry block $block");
-	}
+		file_put_contents(ROOT."/block",$block);
+		$block+=1;
+	} catch(Exception $e1) {DBG("No tx:$block");}
 }
-DBG2("\n".(microtime(true)-$start).":$block:$blocks\n");
+//echo ("\n".microtime(true)-$start).":$block:$blocks\n";
 
-unlink("$root/lock");  // Release
-
-function DBG($txt) {
-	global $root;
-	$stamp=date("d-m-y h:i:s ");
-	file_put_contents("$root/build.log","$stamp $txt\n",FILE_APPEND);
+file_put_contents(ROOT."/sema","release");
+function trap($wie,$blok, $tx) {
+		$to="monitor@domain.com";
+		$subject="ALARM: TXout movement $wie";
+		$message="<p>signaled in blok: $blok<br>Txin:$tx";
+		$mime_boundary="==Multipart_Boundary_x".md5(mt_rand())."x";
+		$headers = "From: noreply@e-gulden.org\r\n" .
+			"MIME-Version: 1.0\r\n" .
+			"Content-Type: multipart/mixed;\r\n" .
+			" boundary=\"{$mime_boundary}\"";
+		$message = "This is a multi-part message in MIME format.\n\n" .
+			"--{$mime_boundary}\n" .
+			"Content-Type: text/html; charset=\"iso-8859-1\"\n" .
+			"Content-Transfer-Encoding: 7bit\n\n" .$message. "\n\n";
+		$message.="--{$mime_boundary}--\n";
+		mail($to, $subject, $message, $headers);
 }
-function DBG2($txt) {
-	global $root;
-	$stamp=date("d-m-y h:i:s ");
-	file_put_contents("$root/new.log","$stamp $txt\n",FILE_APPEND);
-}
-function getfile($root,$key){ // ...abcd => $root/cd/ab
+function DBG($txt) {file_put_contents(ROOT."/build.log","$txt\n",FILE_APPEND);}
+function DBG2($txt) {file_put_contents(ROOT."/new.log","$txt\n",FILE_APPEND);}
+function getfile($root,$key){
 	$dir=$root.substr($key,-2);
 	if (!file_exists($dir)) {mkdir($dir,0755);}
 	$dir=$root.substr($key,-2)."/".substr($key,-4,2);
-	if (!file_exists($dir)) {mkdir($dir,0755);}
+	if (!file_exists($dir)) {mkdir($dir,0755);DBG2($dir);}
 	return "$dir/$key";
 }
 ?>
-</pre>
-OK
